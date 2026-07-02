@@ -1,0 +1,8 @@
+python-telegram-bot==20.7
+gigachat
+PyMuPDF
+python-docx
+python-dotenv
+aiosqlite
+aiohttp
+requests
