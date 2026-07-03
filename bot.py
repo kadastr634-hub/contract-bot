@@ -73,15 +73,21 @@ def format_free_result(data: dict, analysis_id: int):
     if total_int == 1:
         risks_line = "⚠️ Обнаружен <b>1 риск</b>"
         hidden_block = ""
-        all_risks_line = "— полный разбор найденного риска с конкретным пунктом"
+        all_risks_line = "полный разбор найденного риска с конкретным пунктом"
     else:
         risks_line = f"⚠️ Обнаружено рисков: <b>{total_int}</b>"
         hidden_count = total_int - 1
+        if hidden_count == 1:
+            hidden_word = "условие"
+        elif hidden_count < 5:
+            hidden_word = "условия"
+        else:
+            hidden_word = "условий"
         hidden_block = (
             f"\n🔒 Мы нашли ещё <b>{hidden_count}</b> потенциально опасных "
-            f"условия в вашем договоре.\n\nОни доступны в полном анализе.\n"
+            f"{hidden_word} в вашем договоре.\n\nОни доступны в полном анализе.\n"
         )
-        all_risks_line = f"— все {total_int} рисков с конкретными пунктами договора"
+        all_risks_line = f"все {total_int} рисков с конкретными пунктами договора"
 
     if quote:
         quote_block = (
@@ -207,7 +213,14 @@ async def send_pro_analysis(user_id: int, payment_id: str, message):
         return
     raw_pro = None
     for attempt in range(2):
-        raw_pro = ask_gigachat(build_pro_prompt(analysis["doc_text"], analysis["role"] or "Не указана"))
+        raw_pro = ask_gigachat(
+        build_pro_prompt(
+            analysis["doc_text"],
+            analysis["role"] or "Не указана",
+            analysis["verdict"] or "",
+            analysis["score"] or 0
+        )
+    )
         if raw_pro:
             break
         if attempt == 0:

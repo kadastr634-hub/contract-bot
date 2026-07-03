@@ -16,7 +16,7 @@ def build_free_prompt(text: str, role: str) -> str:
 ДОКУМЕНТ:
 {text}
 
-ОБЯЗАТЕЛЬНЫЙ ФОРМАТ ОТВЕТА — строго 6 строк, не больше:
+ОБЯЗАТЕЛЬНЫЙ ФОРМАТ ОТВЕТА — строго 5 полей, не больше:
 
 VERDICT: [🟢 Можно подписывать / 🟡 Можно подписывать с правками / 🔴 Нельзя подписывать]
 SCORE: [целое число от 0 до 10]
@@ -28,16 +28,19 @@ RISK_QUOTE: [одна короткая цитата из договора — Т
 - Верни РОВНО 5 полей — не больше
 - RISK_TITLE и RISK_QUOTE — только для ОДНОГО самого важного риска
 - НЕ перечисляй остальные риски
-- НЕ добавляй RISK_CATEGORY, RISK_2, RISK_3 или любые другие поля
+- НЕ добавляй никаких других полей
 - НЕ давай рекомендаций
 - Анализируй с позиции роли: {role}"""
 
 
-def build_pro_prompt(text: str, role: str) -> str:
+def build_pro_prompt(text: str, role: str, verdict: str = "", score: int = 0) -> str:
     text = text[:25000] if len(text) > 25000 else text
+    verdict_hint = ""
+    if verdict and score:
+        verdict_hint = f"\nВАЖНО: используй именно этот вердикт: {verdict}, Score: {score}\n"
     return f"""Ты — AI Risk Engine для анализа договоров. Ты профессиональный юрист-аналитик.
 Роль клиента: {role}
-
+{verdict_hint}
 Дай ПОЛНЫЙ профессиональный анализ договора.
 
 ДОКУМЕНТ:
@@ -45,8 +48,8 @@ def build_pro_prompt(text: str, role: str) -> str:
 
 ОБЯЗАТЕЛЬНЫЙ ФОРМАТ ОТВЕТА:
 
-VERDICT: [🟢 Можно подписывать / 🟡 Можно подписывать с правками / 🔴 Нельзя подписывать]
-SCORE: [0-10]
+VERDICT: [используй вердикт из подсказки выше]
+SCORE: [используй score из подсказки выше]
 SUMMARY: [2-3 предложения общего вывода по договору]
 
 RISK_1_TITLE: [название риска]
@@ -106,8 +109,7 @@ def parse_free(raw: str):
         "score": int(score_raw) if score_raw else 5,
         "total_risks": find(r"TOTAL_RISKS:\s*(\d+)", "?"),
         "risk_title": find(r"RISK_TITLE:\s*(.+?)(?:\n|$)", "Риск не определён"),
-        "risk_category": find(r"RISK_CATEGORY:\s*(.+?)(?:\n|$)", ""),
-        "risk_quote": find(r"RISK_QUOTE:\s*(.+?)(?:\n\n|$)", ""),
+        "risk_quote": find(r"RISK_QUOTE:\s*(.+?)(?:\n\n|\Z)", ""),
     }
 
 
