@@ -93,6 +93,12 @@ def format_free_result(data: dict, analysis_id: int):
     else:
         risk_hint = "Это может стоить вам денег."
 
+    quote = data.get("risk_quote", "")
+    if quote:
+        quote_block = f"\n📄 <i>Из вашего договора:</i>\n<i>«{quote}»</i>\n\n👆 Именно это условие требует внимания.\n"
+    else:
+        quote_block = ""
+
     text = (
         f"📌 <b>РЕЗУЛЬТАТ ПРОВЕРКИ</b>\n\n"
         f"{verdict}\n\n"
@@ -102,7 +108,8 @@ def format_free_result(data: dict, analysis_id: int):
         f"{risk_header}\n\n"
         f"<b>{risk_title}</b>\n\n"
         f"В договоре есть условие, которое в случае спора работает против вас.\n\n"
-        f"{risk_hint}"
+        f"{risk_hint}\n"
+        f"{quote_block}"
         f"{hidden_line}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"Чтобы узнать:\n"
