@@ -62,8 +62,8 @@ def extract_docx(path: str) -> str:
 
 def format_free_result(data: dict, analysis_id: int):
     verdict = get_verdict(data["score"])
-    category = data.get("risk_category", "")
     risk_title = data.get("risk_title", "—")
+    quote = data.get("risk_quote", "")
 
     try:
         total_int = int(data.get("total_risks", 1))
@@ -71,33 +71,26 @@ def format_free_result(data: dict, analysis_id: int):
         total_int = 1
 
     if total_int == 1:
-        risks_line = "⚠️ Выявлен <b>1 риск</b>"
-        risk_header = "⚠️ <b>КЛЮЧЕВОЙ РИСК</b>"
-        hidden_line = ""
-        all_risks_line = "— полный разбор найденного риска с конкретным пунктом договора"
+        risks_line = "⚠️ Обнаружен <b>1 риск</b>"
+        hidden_block = ""
+        all_risks_line = "— полный разбор найденного риска с конкретным пунктом"
     else:
-        risks_line = f"⚠️ Выявлено рисков: <b>{total_int}</b>"
-        risk_header = f"⚠️ <b>КЛЮЧЕВОЙ РИСК (1 из {total_int})</b>"
+        risks_line = f"⚠️ Обнаружено рисков: <b>{total_int}</b>"
         hidden_count = total_int - 1
-        if hidden_count == 1:
-            hidden_word = "риск скрыт"
-        elif hidden_count < 5:
-            hidden_word = "риска скрыты"
-        else:
-            hidden_word = "рисков скрыты"
-        hidden_line = f"\n<b>+ ещё {hidden_count} {hidden_word}</b>\n"
+        hidden_block = (
+            f"\n🔒 Мы нашли ещё <b>{hidden_count}</b> потенциально опасных "
+            f"условия в вашем договоре.\n\nОни доступны в полном анализе.\n"
+        )
         all_risks_line = f"— все {total_int} рисков с конкретными пунктами договора"
 
-    if category:
-        risk_hint = f"Это касается: <b>{category}</b>.\nЭто может стоить вам денег."
-    else:
-        risk_hint = "Это может стоить вам денег."
-
-    quote = data.get("risk_quote", "")
     if quote:
-        quote_block = f"\n📄 <i>Из вашего договора:</i>\n<i>«{quote}»</i>\n\n👆 Именно это условие требует внимания.\n"
+        quote_block = (
+            f"📄 <b>Фрагмент вашего договора:</b>\n"
+            f"<i>«{quote}»</i>\n\n"
+            f"👆 Именно это условие требует внимания.\n"
+        )
     else:
-        quote_block = ""
+        quote_block = "В договоре есть условие, которое в случае спора работает против вас.\n"
 
     text = (
         f"📌 <b>РЕЗУЛЬТАТ ПРОВЕРКИ</b>\n\n"
@@ -105,18 +98,16 @@ def format_free_result(data: dict, analysis_id: int):
         f"📊 <b>Score:</b> {data['score']}/10\n"
         f"{risks_line}\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"{risk_header}\n\n"
+        f"⚠️ <b>КЛЮЧЕВОЙ РИСК</b>\n\n"
         f"<b>{risk_title}</b>\n\n"
-        f"В договоре есть условие, которое в случае спора работает против вас.\n\n"
-        f"{risk_hint}\n"
         f"{quote_block}"
-        f"{hidden_line}\n"
+        f"{hidden_block}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"Чтобы узнать:\n"
-        f"— {all_risks_line}\n"
-        f"— сколько каждый из них реально может стоить\n"
-        f"— готовую замену «Было → Стало» по каждому\n"
-        f"— как обсуждать это со второй стороной\n\n"
+        f"Полная версия покажет:\n\n"
+        f"✅ {all_risks_line}\n"
+        f"✅ последствия каждого риска\n"
+        f"✅ готовые правки «Было → Стало»\n"
+        f"✅ стратегию переговоров\n\n"
         f"👇"
     )
 
