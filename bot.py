@@ -11,7 +11,8 @@ from config import TELEGRAM_TOKEN, PAID_PRICE
 from database import (
     init_db, get_or_create_user, set_user_role, get_user_role,
     save_analysis, get_analysis, save_pro_result,
-    create_payment_record, update_payment_status
+    create_payment_record, update_payment_status,
+    get_user_agreement, save_user_agreement
 )
 from payments import create_payment, check_payment_status
 from ai_engine import (
@@ -42,6 +43,9 @@ ROLES = {
     "7": "Покупатель"
 }
 
+PRIVACY_URL = "https://telegra.ph/Politika-obrabotki-personalnyh-dannyh-07-04-3"
+
+
 def extract_pdf(path: str) -> str:
     try:
         doc = fitz.open(path)
@@ -52,6 +56,7 @@ def extract_pdf(path: str) -> str:
         if os.path.exists(path):
             os.remove(path)
 
+
 def extract_docx(path: str) -> str:
     try:
         doc = docx_lib.Document(path)
@@ -59,6 +64,7 @@ def extract_docx(path: str) -> str:
     finally:
         if os.path.exists(path):
             os.remove(path)
+
 
 def format_free_result(data: dict, analysis_id: int):
     verdict = get_verdict(data["score"])
@@ -115,27 +121,59 @@ def format_free_result(data: dict, analysis_id: int):
     ]])
 
     return text, keyboard
+
+
 async def privacy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(
-            "📄 Открыть политику",
-            url="https://telegra.ph/Politika-obrabotki-personalnyh-dannyh-07-04-3"
-        )
+        InlineKeyboardButton("📄 Открыть политику", url=PRIVACY_URL)
     ]])
     await update.message.reply_text(
         "📋 <b>Политика обработки персональных данных</b>\n\n"
-        "Используя бота, вы соглашаетесь с политикой "
-        "обработки персональных данных.",
+        "Нажмите кнопку ниже чтобы ознакомиться с политикой.",
         reply_markup=keyboard,
         parse_mode="HTML"
     )
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await get_or_create_user(user.id, user.username or "")
-    await update.message.reply_text(
+
+    agreed = await get_user_agreement(user.id)
+
+    if not agreed:
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "✅ Согласен — начать работу",
+                callback_data="agree"
+            )
+        ], [
+            InlineKeyboardButton("📄 Политика данных", url=PRIVACY_URL)
+        ]])
+        await update.message.reply_text(
+            "🤖 <b>Можно подписывать AI</b>\n\n"
+            "Проверяю договоры перед подписанием за 30 секунд.\n\n"
+            "Перед началом ознакомьтесь с <a href='" + PRIVACY_URL + "'>политикой "
+            "обработки персональных данных</a> и нажмите «Согласен».",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+        return
+
+    await show_menu(update.message)
+
+
+async def show_menu(message):
+    await message.reply_text(
         "🤖 <b>Можно подписывать AI</b>\n\n"
-        "Анализирую договоры перед подписанием.\n\n"
-        "Выберите вашу роль — отправьте цифру:\n\n"
+        "Проверяю договоры перед подписанием за 30 секунд.\n\n"
+        "<b>Что умею:</b>\n\n"
+        "📄 Анализирую PDF, DOCX и текст договора\n"
+        "⚖️ Нахожу все опасные условия и риски\n"
+        "💰 Показываю где можно потерять деньги\n"
+        "✍️ Даю готовые формулировки «Было → Стало»\n"
+        "🧠 Строю переговорную стратегию\n\n"
+        "<b>Выберите роль — отправьте цифру:</b>\n\n"
         "👤 <b>1</b> — Собственник бизнеса\n"
         "🏢 <b>2</b> — Арендатор\n"
         "🏠 <b>3</b> — Арендодатель\n"
@@ -143,32 +181,52 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🛠 <b>5</b> — Исполнитель\n"
         "🚚 <b>6</b> — Поставщик\n"
         "🛒 <b>7</b> — Покупатель\n\n"
-        "После выбора роли отправьте договор: PDF / DOCX / текст",
+        "После выбора роли отправьте договор 👇",
         parse_mode="HTML"
     )
+
+
+async def agree_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = update.effective_user.id
+    await save_user_agreement(user_id)
+    await show_menu(query.message)
+
 
 async def pay_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = update.effective_user.id
+
     try:
         analysis_id = int(query.data.split("_")[1])
     except (IndexError, ValueError):
         await query.message.reply_text("❌ Ошибка. Загрузите договор заново.")
         return
+
     await query.message.reply_text("⏳ Создаю ссылку на оплату...")
+
     result = create_payment(user_id, analysis_id, PAID_PRICE)
     if not result:
-        await query.message.reply_text("❌ Не удалось создать платёж. Попробуйте через минуту.")
+        await query.message.reply_text(
+            "❌ Не удалось создать платёж. Попробуйте через минуту."
+        )
         return
+
     payment_id, confirm_url = result
     await create_payment_record(user_id, analysis_id, payment_id, PAID_PRICE)
     log.info(f"Создан платёж {payment_id} user={user_id} analysis={analysis_id}")
+
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("💳 Оплатить", url=confirm_url)
     ], [
-        InlineKeyboardButton("✅ Я оплатил — проверить", callback_data=f"check_{payment_id}")
+        InlineKeyboardButton(
+            "✅ Я оплатил — проверить",
+            callback_data=f"check_{payment_id}"
+        )
     ]])
+
     await query.message.reply_text(
         f"💳 <b>Оплата полного анализа</b>\n\n"
         f"Сумма: <b>{PAID_PRICE} ₽</b>\n\n"
@@ -179,17 +237,21 @@ async def pay_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
+
 async def check_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer("Проверяю...")
     user_id = update.effective_user.id
+
     try:
         payment_id = query.data.split("_", 1)[1]
     except IndexError:
         await query.message.reply_text("❌ Ошибка проверки.")
         return
+
     status = check_payment_status(payment_id)
     log.info(f"Проверка платежа {payment_id}: {status}")
+
     if status == "succeeded":
         await update_payment_status(payment_id, "succeeded")
         await query.message.reply_text(
@@ -199,37 +261,51 @@ async def check_payment_callback(update: Update, context: ContextTypes.DEFAULT_T
         )
         await send_pro_analysis(user_id, payment_id, query.message)
     elif status == "pending":
-        await query.message.reply_text("⏳ Оплата ещё обрабатывается.\n\nПодождите минуту и нажмите «Я оплатил» снова.")
+        await query.message.reply_text(
+            "⏳ Оплата ещё обрабатывается.\n\nПодождите минуту и нажмите «Я оплатил» снова."
+        )
     elif status == "canceled":
-        await query.message.reply_text("❌ Платёж отменён.\n\nНажмите «Получить полный разбор» снова.")
+        await query.message.reply_text(
+            "❌ Платёж отменён.\n\nНажмите «Получить полный разбор» снова."
+        )
     else:
-        await query.message.reply_text("Статус обновляется. Если оплата прошла — подождите минуту и проверьте снова.")
+        await query.message.reply_text(
+            "Статус обновляется. Если оплата прошла — подождите минуту и проверьте снова."
+        )
+
 
 async def send_pro_analysis(user_id: int, payment_id: str, message):
     from database import get_payment_by_id
+
     payment = await get_payment_by_id(payment_id)
     if not payment:
         await message.reply_text("❌ Не найдена запись платежа. Напишите нам.")
         return
+
     analysis = await get_analysis(payment["analysis_id"])
     if not analysis:
-        await message.reply_text("❌ Не найден документ. Загрузите договор повторно — этот анализ будет бесплатным.")
+        await message.reply_text(
+            "❌ Не найден документ. Загрузите договор повторно — "
+            "этот анализ будет бесплатным."
+        )
         return
+
     raw_pro = None
     for attempt in range(2):
         raw_pro = ask_gigachat(
-        build_pro_prompt(
-            analysis["doc_text"],
-            analysis["role"] or "Не указана",
-            analysis["verdict"] or "",
-            analysis["score"] or 0
+            build_pro_prompt(
+                analysis["doc_text"],
+                analysis["role"] or "Не указана",
+                analysis["verdict"] or "",
+                analysis["score"] or 0
+            )
         )
-    )
         if raw_pro:
             break
         if attempt == 0:
             log.warning("GigaChat не ответил, повторная попытка...")
             time.sleep(3)
+
     if not raw_pro:
         await message.reply_text(
             "⚠️ Сервис анализа сейчас временно перегружен.\n\n"
@@ -237,16 +313,22 @@ async def send_pro_analysis(user_id: int, payment_id: str, message):
             "Если анализ не придёт в течение 2 минут — напишите нам."
         )
         return
+
     pro_data = parse_pro(raw_pro)
     if pro_data:
         await save_pro_result(payment["analysis_id"], pro_data)
         messages = format_pro_result(pro_data)
     else:
         messages = [f"📋 <b>Полный анализ:</b>\n\n{raw_pro[:3500]}"]
+
     for msg in messages:
         await message.reply_text(msg, parse_mode="HTML")
+
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("📄 Проверить ещё один договор", callback_data="new_analysis")
+        InlineKeyboardButton(
+            "📄 Проверить ещё один договор",
+            callback_data="new_analysis"
+        )
     ]])
     await message.reply_text(
         "✅ <b>Анализ завершён.</b>\n\nХотите проверить ещё один договор?",
@@ -254,57 +336,58 @@ async def send_pro_analysis(user_id: int, payment_id: str, message):
         parse_mode="HTML"
     )
 
+
 async def new_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user = update.effective_user
     role = await get_user_role(user.id)
+
     if role:
         await query.message.reply_text(
-            f"📄 Отправьте следующий договор.\n\nТекущая роль: <b>{role}</b>\nЧтобы изменить роль — отправьте цифру от 1 до 7.",
+            f"📄 Отправьте следующий договор.\n\n"
+            f"Текущая роль: <b>{role}</b>\n"
+            f"Чтобы изменить роль — отправьте цифру от 1 до 7.",
             parse_mode="HTML"
         )
     else:
-        await query.message.reply_text(
-            "Отправьте цифру чтобы выбрать роль:\n\n"
-            "👤 <b>1</b> — Собственник бизнеса\n"
-            "🏢 <b>2</b> — Арендатор\n"
-            "🏠 <b>3</b> — Арендодатель\n"
-            "📄 <b>4</b> — Заказчик\n"
-            "🛠 <b>5</b> — Исполнитель\n"
-            "🚚 <b>6</b> — Поставщик\n"
-            "🛒 <b>7</b> — Покупатель",
-            parse_mode="HTML"
-        )
+        await show_menu(query.message)
+
 
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     await get_or_create_user(user_id, user.username or "")
+
     # Защита от спама
     if update.message.text:
-        spam_keywords = ["казино", "casino", "ставки", "бонус", "фрибет", 
+        spam_keywords = ["казино", "casino", "ставки", "бонус", "фрибет",
                         "lucky", "кэшбэк", "выплат", "http", "https", "t.me/+"]
         msg_lower = update.message.text.lower()
         if any(kw in msg_lower for kw in spam_keywords):
             log.warning(f"Спам от user={user_id}: {update.message.text[:50]}")
             return
+
     text = None
     doc_type = "text"
+
     if update.message.text:
         raw = update.message.text.strip()
         if raw in ROLES:
             await set_user_role(user_id, ROLES[raw])
             await update.message.reply_text(
-                f"✅ <b>Роль выбрана:</b> {ROLES[raw]}\n\n📄 Теперь отправьте договор:\n— PDF\n— DOCX\n— или вставьте текст",
+                f"✅ <b>Роль выбрана:</b> {ROLES[raw]}\n\n"
+                f"📄 Теперь отправьте договор:\n— PDF\n— DOCX\n— или вставьте текст",
                 parse_mode="HTML"
             )
             return
         text = raw
+
     if update.message.document:
         file = await update.message.document.get_file()
         filename = update.message.document.file_name.lower()
         ts = int(time.time())
+
         if filename.endswith(".pdf"):
             path = f"/tmp/doc_{user_id}_{ts}.pdf"
             await file.download_to_drive(path)
@@ -316,16 +399,27 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text = extract_docx(path)
             doc_type = "docx"
         else:
-            await update.message.reply_text("⚠️ Только PDF и DOCX файлы.")
+            await update.message.reply_text(
+                "⚠️ Поддерживаются только PDF и DOCX файлы."
+            )
             return
+
     if not text:
-        await update.message.reply_text("📄 Отправьте договор:\n— PDF файл\n— DOCX файл\n— или вставьте текст")
+        await update.message.reply_text(
+            "📄 Отправьте договор:\n— PDF файл\n— DOCX файл\n— или вставьте текст"
+        )
         return
+
     if len(text.strip()) < 100:
-        await update.message.reply_text("⚠️ Текст слишком короткий.")
+        await update.message.reply_text(
+            "⚠️ Текст слишком короткий.\n\n"
+            "Убедитесь что файл содержит текст, а не сканы изображений."
+        )
         return
+
     role = await get_user_role(user_id) or "Не указана"
     loading_msg = await update.message.reply_text("⏳ Анализирую договор...")
+
     raw_ai = None
     for attempt in range(2):
         raw_ai = ask_gigachat(build_free_prompt(text, role))
@@ -333,34 +427,56 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             break
         if attempt == 0:
             time.sleep(3)
+
     try:
         await loading_msg.delete()
     except Exception:
         pass
+
     if not raw_ai:
-        await update.message.reply_text("⚠️ Сервис анализа сейчас временно перегружен.\n\nПопробуйте через 1–2 минуты.")
+        await update.message.reply_text(
+            "⚠️ Сервис анализа сейчас временно перегружен.\n\n"
+            "Попробуйте отправить договор ещё раз через 1–2 минуты."
+        )
         return
+
     data = parse_free(raw_ai)
     if not data:
-        await update.message.reply_text("⚠️ Сервис анализа сейчас временно перегружен.\n\nПопробуйте через минуту.")
+        await update.message.reply_text(
+            "⚠️ Сервис анализа сейчас временно перегружен.\n\n"
+            "Попробуйте отправить договор ещё раз через минуту."
+        )
         return
+
     verdict = get_verdict(data["score"])
     analysis_id = await save_analysis(
-        user_id=user_id, role=role, doc_type=doc_type,
-        doc_text=text, verdict=verdict, score=data["score"],
+        user_id=user_id,
+        role=role,
+        doc_type=doc_type,
+        doc_text=text,
+        verdict=verdict,
+        score=data["score"],
         free_result=data
     )
+
     log.info(f"Анализ #{analysis_id} user={user_id} score={data['score']} role={role}")
     result_text, keyboard = format_free_result(data, analysis_id)
-    await update.message.reply_text(result_text, reply_markup=keyboard, parse_mode="HTML")
+    await update.message.reply_text(
+        result_text,
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+
 
 async def post_init(application):
     await init_db()
     log.info("БД инициализирована")
 
+
 app = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("privacy", privacy_command))
+app.add_handler(CallbackQueryHandler(agree_callback, pattern=r"^agree$"))
 app.add_handler(CallbackQueryHandler(pay_callback, pattern=r"^pay_\d+$"))
 app.add_handler(CallbackQueryHandler(check_payment_callback, pattern=r"^check_.+$"))
 app.add_handler(CallbackQueryHandler(new_analysis_callback, pattern=r"^new_analysis$"))

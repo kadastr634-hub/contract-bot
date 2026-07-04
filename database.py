@@ -12,7 +12,8 @@ async def init_db():
                 user_id INTEGER PRIMARY KEY,
                 username TEXT,
                 role TEXT DEFAULT NULL,
-                created_at TEXT
+                created_at TEXT,
+                agreed_at TEXT DEFAULT NULL
             )
         """)
         await db.execute("""
@@ -42,6 +43,11 @@ async def init_db():
                 paid_at TEXT DEFAULT NULL
             )
         """)
+        # Добавляем колонку если её нет (для существующих баз)
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN agreed_at TEXT DEFAULT NULL")
+        except Exception:
+            pass
         await db.commit()
 
 
@@ -138,3 +144,23 @@ async def get_payment_by_id(payment_id: str):
                 return None
             cols = [d[0] for d in cur.description]
             return dict(zip(cols, row))
+
+
+async def get_user_agreement(user_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT agreed_at FROM users WHERE user_id = ?", (user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            if not row:
+                return False
+            return row[0] is not None
+
+
+async def save_user_agreement(user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE users SET agreed_at = ? WHERE user_id = ?",
+            (datetime.now().isoformat(), user_id)
+        )
+        await db.commit()
