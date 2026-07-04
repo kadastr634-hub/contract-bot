@@ -115,6 +115,20 @@ def format_free_result(data: dict, analysis_id: int):
     ]])
 
     return text, keyboard
+async def privacy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "📄 Открыть политику",
+            url="https://telegra.ph/Politika-obrabotki-personalnyh-dannyh-07-04-3"
+        )
+    ]])
+    await update.message.reply_text(
+        "📋 <b>Политика обработки персональных данных</b>\n\n"
+        "Используя бота, вы соглашаетесь с политикой "
+        "обработки персональных данных.",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await get_or_create_user(user.id, user.username or "")
@@ -346,6 +360,7 @@ async def post_init(application):
 
 app = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("privacy", privacy_command))
 app.add_handler(CallbackQueryHandler(pay_callback, pattern=r"^pay_\d+$"))
 app.add_handler(CallbackQueryHandler(check_payment_callback, pattern=r"^check_.+$"))
 app.add_handler(CallbackQueryHandler(new_analysis_callback, pattern=r"^new_analysis$"))
