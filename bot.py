@@ -267,6 +267,14 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     await get_or_create_user(user_id, user.username or "")
+    # Защита от спама
+    if update.message.text:
+        spam_keywords = ["казино", "casino", "ставки", "бонус", "фрибет", 
+                        "lucky", "кэшбэк", "выплат", "http", "https", "t.me/+"]
+        msg_lower = update.message.text.lower()
+        if any(kw in msg_lower for kw in spam_keywords):
+            log.warning(f"Спам от user={user_id}: {update.message.text[:50]}")
+            return
     text = None
     doc_type = "text"
     if update.message.text:
