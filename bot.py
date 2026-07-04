@@ -115,7 +115,6 @@ def format_free_result(data: dict, analysis_id: int):
     ]])
 
     return text, keyboard
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await get_or_create_user(user.id, user.username or "")
@@ -268,6 +267,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     await get_or_create_user(user_id, user.username or "")
+    # Защита от спама
     if update.message.text:
         spam_keywords = ["казино", "casino", "ставки", "бонус", "фрибет", 
                         "lucky", "кэшбэк", "выплат", "http", "https", "t.me/+"]
