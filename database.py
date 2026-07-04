@@ -7,7 +7,7 @@ DB_PATH = "bot.db"
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
-await db.execute("""
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
                 username TEXT,
@@ -139,7 +139,9 @@ async def get_payment_by_id(payment_id: str):
                 return None
             cols = [d[0] for d in cur.description]
             return dict(zip(cols, row))
-        async def get_user_agreement(user_id: int) -> bool:
+
+
+async def get_user_agreement(user_id: int) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             "SELECT agreed_at FROM users WHERE user_id = ?", (user_id,)
