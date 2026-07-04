@@ -16,21 +16,22 @@ def build_free_prompt(text: str, role: str) -> str:
 ДОКУМЕНТ:
 {text}
 
-ОБЯЗАТЕЛЬНЫЙ ФОРМАТ ОТВЕТА — строго 5 полей, не больше:
+ОБЯЗАТЕЛЬНЫЙ ФОРМАТ — строго 4 поля, ничего лишнего:
 
 VERDICT: [🟢 Можно подписывать / 🟡 Можно подписывать с правками / 🔴 Нельзя подписывать]
 SCORE: [целое число от 0 до 10]
-TOTAL_RISKS: [количество всех рисков]
-RISK_TITLE: [название ТОЛЬКО одного — самого критичного риска, простыми словами]
-RISK_QUOTE: [одна короткая цитата из договора — ТОЛЬКО для этого одного риска, 1-2 предложения дословно]
+TOTAL_RISKS: [общее количество рисков в договоре]
+RISK_TITLE: [общее название самого критичного риска — коротко, без деталей, без цитат, без номеров пунктов]
 
-КРИТИЧЕСКИ ВАЖНО:
-- Верни РОВНО 5 полей — не больше
-- RISK_TITLE и RISK_QUOTE — только для ОДНОГО самого важного риска
-- НЕ перечисляй остальные риски
-- НЕ добавляй никаких других полей
-- НЕ давай рекомендаций
-- Анализируй с позиции роли: {role}"""
+ЗАПРЕЩЕНО:
+- Писать более 4 полей
+- Указывать номера пунктов
+- Цитировать текст договора
+- Давать рекомендации
+- Описывать второй и последующие риски
+- Добавлять любые поля кроме четырёх выше
+
+Анализируй с позиции роли: {role}"""
 
 
 def build_pro_prompt(text: str, role: str, verdict: str = "", score: int = 0) -> str:
@@ -101,15 +102,22 @@ def parse_free(raw: str):
         return None
 
     def find(pattern, default=None):
-        m = re.search(pattern, raw, re.IGNORECASE | re.DOTALL)
+        m = re.search(pattern, raw, re.IGNORECASE)
         return m.group(1).strip() if m else default
 
     score_raw = find(r"SCORE:\s*(\d+)")
+
+    # Берём только первую строку RISK_TITLE — обрезаем мусор
+    risk_raw = find(r"RISK_TITLE:\s*(.+)", "Риск не определён")
+    if risk_raw:
+        risk_title = risk_raw.split("\n")[0].strip()
+    else:
+        risk_title = "Риск не определён"
+
     return {
         "score": int(score_raw) if score_raw else 5,
         "total_risks": find(r"TOTAL_RISKS:\s*(\d+)", "?"),
-        "risk_title": find(r"RISK_TITLE:\s*(.+?)(?:\n|$)", "Риск не определён"),
-        "risk_quote": find(r"RISK_QUOTE:\s*(.+?)(?:\n\n|\Z)", ""),
+        "risk_title": risk_title,
     }
 
 

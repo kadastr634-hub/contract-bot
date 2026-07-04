@@ -63,7 +63,6 @@ def extract_docx(path: str) -> str:
 def format_free_result(data: dict, analysis_id: int):
     verdict = get_verdict(data["score"])
     risk_title = data.get("risk_title", "—")
-    quote = data.get("risk_quote", "")
 
     try:
         total_int = int(data.get("total_risks", 1))
@@ -72,31 +71,21 @@ def format_free_result(data: dict, analysis_id: int):
 
     if total_int == 1:
         risks_line = "⚠️ Обнаружен <b>1 риск</b>"
+        risk_header = "⚠️ <b>КЛЮЧЕВОЙ РИСК</b>"
         hidden_block = ""
         all_risks_line = "полный разбор найденного риска с конкретным пунктом"
     else:
         risks_line = f"⚠️ Обнаружено рисков: <b>{total_int}</b>"
+        risk_header = f"⚠️ <b>КЛЮЧЕВОЙ РИСК (1 из {total_int})</b>"
         hidden_count = total_int - 1
         if hidden_count == 1:
-            hidden_word = "условие"
+            hidden_word = "риск скрыт"
         elif hidden_count < 5:
-            hidden_word = "условия"
+            hidden_word = "риска скрыты"
         else:
-            hidden_word = "условий"
-        hidden_block = (
-            f"\n🔒 Мы нашли ещё <b>{hidden_count}</b> потенциально опасных "
-            f"{hidden_word} в вашем договоре.\n\nОни доступны в полном анализе.\n"
-        )
-        all_risks_line = f"все {total_int} рисков с конкретными пунктами договора"
-
-    if quote:
-        quote_block = (
-            f"📄 <b>Фрагмент вашего договора:</b>\n"
-            f"<i>«{quote}»</i>\n\n"
-            f"👆 Именно это условие требует внимания.\n"
-        )
-    else:
-        quote_block = "В договоре есть условие, которое в случае спора работает против вас.\n"
+            hidden_word = "рисков скрыты"
+        hidden_block = f"\n<b>+ ещё {hidden_count} {hidden_word}</b>\n"
+        all_risks_line = f"все {total_int} риска с конкретными пунктами договора"
 
     text = (
         f"📌 <b>РЕЗУЛЬТАТ ПРОВЕРКИ</b>\n\n"
@@ -104,16 +93,17 @@ def format_free_result(data: dict, analysis_id: int):
         f"📊 <b>Score:</b> {data['score']}/10\n"
         f"{risks_line}\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"⚠️ <b>КЛЮЧЕВОЙ РИСК</b>\n\n"
+        f"{risk_header}\n\n"
         f"<b>{risk_title}</b>\n\n"
-        f"{quote_block}"
+        f"В договоре есть условие, которое в случае спора работает против вас.\n"
+        f"Это может стоить вам денег.\n"
         f"{hidden_block}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"Полная версия покажет:\n\n"
-        f"✅ {all_risks_line}\n"
-        f"✅ последствия каждого риска\n"
-        f"✅ готовые правки «Было → Стало»\n"
-        f"✅ стратегию переговоров\n\n"
+        f"Чтобы узнать:\n"
+        f"— {all_risks_line}\n"
+        f"— чем каждый грозит в деньгах\n"
+        f"— готовые формулировки «Было → Стало»\n"
+        f"— как обсуждать со второй стороной\n\n"
         f"👇"
     )
 
