@@ -11,7 +11,8 @@ from config import TELEGRAM_TOKEN, PAID_PRICE
 from database import (
     init_db, get_or_create_user, set_user_role, get_user_role,
     save_analysis, get_analysis, save_pro_result,
-    create_payment_record, update_payment_status
+    create_payment_record, update_payment_status,
+    accept_privacy, is_privacy_accepted
 )
 from payments import create_payment, check_payment_status
 from ai_engine import (
@@ -115,12 +116,72 @@ def format_free_result(data: dict, analysis_id: int):
     ]])
 
     return text, keyboard
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await get_or_create_user(user.id, user.username or "")
+
+    if await is_privacy_accepted(user.id):
+        await update.message.reply_text(
+            "🤖 <b>Можно подписывать AI</b>\n\n"
+            "Анализирую договоры перед подписанием.\n\n"
+            "Выберите вашу роль — отправьте цифру:\n\n"
+            "👤 <b>1</b> — Собственник бизнеса\n"
+            "🏢 <b>2</b> — Арендатор\n"
+            "🏠 <b>3</b> — Арендодатель\n"
+            "📄 <b>4</b> — Заказчик\n"
+            "🛠 <b>5</b> — Исполнитель\n"
+            "🚚 <b>6</b> — Поставщик\n"
+            "🛒 <b>7</b> — Покупатель\n\n"
+            "После выбора роли отправьте договор: PDF / DOCX / текст",
+            parse_mode="HTML"
+        )
+        return
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📄 Политика обработки данных", callback_data="show_privacy")],
+        [InlineKeyboardButton("✅ Согласен на обработку данных", callback_data="accept_privacy")]
+    ])
+
     await update.message.reply_text(
         "🤖 <b>Можно подписывать AI</b>\n\n"
-        "Анализирую договоры перед подписанием.\n\n"
+        "Я анализирую договоры перед подписанием с помощью ИИ.\n\n"
+        "Перед началом работы необходимо ознакомиться с политикой "
+        "обработки персональных данных и дать согласие.\n\n"
+        "Без согласия анализ договора невозможен — я не смогу "
+        "принять и обработать ваш документ.",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+
+
+async def show_privacy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    try:
+        with open("docs/privacy.pdf", "rb") as f:
+            await query.message.reply_document(
+                document=f,
+                filename="Политика_обработки_данных.pdf",
+                caption="📄 Политика обработки персональных данных\n\n"
+                        "Ознакомьтесь и нажмите «Согласен», чтобы продолжить."
+            )
+    except FileNotFoundError:
+        await query.message.reply_text(
+            "❌ Файл политики временно недоступен. Попробуйте позже."
+        )
+
+
+async def accept_privacy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = update.effective_user.id
+    await accept_privacy(user_id)
+    log.info(f"Пользователь {user_id} принял политику обработки данных")
+
+    await query.message.reply_text(
+        "✅ <b>Согласие получено!</b>\n\n"
         "Выберите вашу роль — отправьте цифру:\n\n"
         "👤 <b>1</b> — Собственник бизнеса\n"
         "🏢 <b>2</b> — Арендатор\n"
@@ -132,6 +193,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "После выбора роли отправьте договор: PDF / DOCX / текст",
         parse_mode="HTML"
     )
+
+
+async def privacy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        with open("docs/privacy.pdf", "rb") as f:
+            await update.message.reply_document(
+                document=f,
+                filename="Политика_обработки_данных.pdf",
+                caption="📄 Политика обработки персональных данных"
+            )
+    except FileNotFoundError:
+        await update.message.reply_text(
+            "❌ Файл политики временно недоступен."
+        )
+
 
 async def pay_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -165,6 +241,7 @@ async def pay_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
+
 async def check_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer("Проверяю...")
@@ -191,6 +268,7 @@ async def check_payment_callback(update: Update, context: ContextTypes.DEFAULT_T
     else:
         await query.message.reply_text("Статус обновляется. Если оплата прошла — подождите минуту и проверьте снова.")
 
+
 async def send_pro_analysis(user_id: int, payment_id: str, message):
     from database import get_payment_by_id
     payment = await get_payment_by_id(payment_id)
@@ -204,13 +282,13 @@ async def send_pro_analysis(user_id: int, payment_id: str, message):
     raw_pro = None
     for attempt in range(2):
         raw_pro = ask_gigachat(
-        build_pro_prompt(
-            analysis["doc_text"],
-            analysis["role"] or "Не указана",
-            analysis["verdict"] or "",
-            analysis["score"] or 0
+            build_pro_prompt(
+                analysis["doc_text"],
+                analysis["role"] or "Не указана",
+                analysis["verdict"] or "",
+                analysis["score"] or 0
+            )
         )
-    )
         if raw_pro:
             break
         if attempt == 0:
@@ -240,6 +318,7 @@ async def send_pro_analysis(user_id: int, payment_id: str, message):
         parse_mode="HTML"
     )
 
+
 async def new_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -263,18 +342,35 @@ async def new_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TY
             parse_mode="HTML"
         )
 
+
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     await get_or_create_user(user_id, user.username or "")
+
+    # Проверка согласия на обработку данных
+    if not await is_privacy_accepted(user_id):
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📄 Политика обработки данных", callback_data="show_privacy")],
+            [InlineKeyboardButton("✅ Согласен на обработку данных", callback_data="accept_privacy")]
+        ])
+        await update.message.reply_text(
+            "⚠️ Для анализа договора необходимо согласие на обработку данных.\n\n"
+            "Ознакомьтесь с политикой и нажмите «Согласен».",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+        return
+
     # Защита от спама
     if update.message.text:
-        spam_keywords = ["казино", "casino", "ставки", "бонус", "фрибет", 
+        spam_keywords = ["казино", "casino", "ставки", "бонус", "фрибет",
                         "lucky", "кэшбэк", "выплат", "http", "https", "t.me/+"]
         msg_lower = update.message.text.lower()
         if any(kw in msg_lower for kw in spam_keywords):
             log.warning(f"Спам от user={user_id}: {update.message.text[:50]}")
             return
+
     text = None
     doc_type = "text"
     if update.message.text:
@@ -340,15 +436,20 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result_text, keyboard = format_free_result(data, analysis_id)
     await update.message.reply_text(result_text, reply_markup=keyboard, parse_mode="HTML")
 
+
 async def post_init(application):
     await init_db()
     log.info("БД инициализирована")
 
+
 app = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("privacy", privacy_command))
 app.add_handler(CallbackQueryHandler(pay_callback, pattern=r"^pay_\d+$"))
 app.add_handler(CallbackQueryHandler(check_payment_callback, pattern=r"^check_.+$"))
 app.add_handler(CallbackQueryHandler(new_analysis_callback, pattern=r"^new_analysis$"))
+app.add_handler(CallbackQueryHandler(show_privacy_callback, pattern="^show_privacy$"))
+app.add_handler(CallbackQueryHandler(accept_privacy_callback, pattern="^accept_privacy$"))
 app.add_handler(MessageHandler(filters.ALL, handle))
 
 log.info("🚀 BOT STARTING...")

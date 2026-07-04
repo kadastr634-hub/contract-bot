@@ -12,6 +12,7 @@ async def init_db():
                 user_id INTEGER PRIMARY KEY,
                 username TEXT,
                 role TEXT DEFAULT NULL,
+                privacy_accepted INTEGER DEFAULT 0,
                 created_at TEXT
             )
         """)
@@ -70,6 +71,24 @@ async def get_user_role(user_id: int):
         ) as cur:
             row = await cur.fetchone()
             return row[0] if row else None
+
+
+async def accept_privacy(user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE users SET privacy_accepted = 1 WHERE user_id = ?",
+            (user_id,)
+        )
+        await db.commit()
+
+
+async def is_privacy_accepted(user_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT privacy_accepted FROM users WHERE user_id = ?", (user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return bool(row and row[0])
 
 
 async def save_analysis(user_id, role, doc_type, doc_text, verdict, score, free_result):
