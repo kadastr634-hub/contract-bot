@@ -11,7 +11,8 @@ from config import TELEGRAM_TOKEN, PAID_PRICE
 from database import (
     init_db, get_or_create_user, set_user_role, get_user_role,
     save_analysis, get_analysis, save_pro_result,
-    create_payment_record, update_payment_status
+    create_payment_record, update_payment_status,
+    get_user_agreement, save_user_agreement
 )
 from payments import create_payment, check_payment_status
 from ai_engine import (
@@ -118,10 +119,47 @@ def format_free_result(data: dict, analysis_id: int):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await get_or_create_user(user.id, user.username or "")
-    await update.message.reply_text(
+
+    # Проверяем давал ли пользователь согласие
+    agreed = await get_user_agreement(user.id)
+
+    if not agreed:
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "✅ Согласен с политикой — начать",
+                callback_data="agree"
+            )
+        ], [
+            InlineKeyboardButton(
+                "📄 Политика обработки данных",
+                url="https://telegra.ph/Politika-obrabotki-personalnyh-dannyh-07-04-3"
+            )
+        ]])
+        await update.message.reply_text(
+            "🤖 <b>Можно подписывать AI</b>\n\n"
+            "Перед началом работы ознакомьтесь с политикой "
+            "обработки персональных данных и дайте согласие.\n\n"
+            "Нажимая «Согласен», вы подтверждаете что ознакомились "
+            "с политикой и даёте согласие на обработку данных.",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+        return
+
+    await show_main_menu(update.message)
+
+
+async def show_main_menu(message):
+    await message.reply_text(
         "🤖 <b>Можно подписывать AI</b>\n\n"
-        "Анализирую договоры перед подписанием.\n\n"
-        "Выберите вашу роль — отправьте цифру:\n\n"
+        "Проверяю договоры перед подписанием за 30 секунд.\n\n"
+        "<b>Что умею:</b>\n\n"
+        "📄 Анализирую PDF, DOCX и текст договора\n"
+        "⚖️ Нахожу все опасные условия и риски\n"
+        "💰 Показываю где можно потерять деньги\n"
+        "✍️ Даю готовые формулировки «Было → Стало»\n"
+        "🧠 Строю переговорную стратегию\n\n"
+        "<b>Выберите роль — отправьте цифру:</b>\n\n"
         "👤 <b>1</b> — Собственник бизнеса\n"
         "🏢 <b>2</b> — Арендатор\n"
         "🏠 <b>3</b> — Арендодатель\n"
@@ -129,7 +167,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🛠 <b>5</b> — Исполнитель\n"
         "🚚 <b>6</b> — Поставщик\n"
         "🛒 <b>7</b> — Покупатель\n\n"
-        "После выбора роли отправьте договор: PDF / DOCX / текст",
+        "После выбора роли отправьте договор 👇",
+        parse_mode="HTML"
+    )
+
+
+async def agree_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = update.effective_user.id
+    await save_user_agreement(user_id)
+    await query.message.reply_text(
+        "✅ Спасибо! Согласие зафиксировано."
+    )
+    await show_main_menu(query.message)
+
+
+async def privacy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "📄 Открыть политику",
+            url="https://telegra.ph/Politika-obrabotki-personalnyh-dannyh-07-04-3"
+        )
+    ]])
+    await update.message.reply_text(
+        "📋 <b>Политика обработки персональных данных</b>\n\n"
+        "Нажмите кнопку ниже чтобы ознакомиться с политикой.",
+        reply_markup=keyboard,
         parse_mode="HTML"
     )
 
@@ -346,6 +410,8 @@ async def post_init(application):
 
 app = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("privacy", privacy_command))
+app.add_handler(CallbackQueryHandler(agree_callback, pattern=r"^agree$"))
 app.add_handler(CallbackQueryHandler(pay_callback, pattern=r"^pay_\d+$"))
 app.add_handler(CallbackQueryHandler(check_payment_callback, pattern=r"^check_.+$"))
 app.add_handler(CallbackQueryHandler(new_analysis_callback, pattern=r"^new_analysis$"))
