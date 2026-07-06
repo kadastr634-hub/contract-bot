@@ -43,11 +43,97 @@ async def init_db():
                 paid_at TEXT DEFAULT NULL
             )
         """)
-        # Добавляем колонку если её нет (для существующих баз)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS risk_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                analysis_id INTEGER,
+                doc_type TEXT,
+                role TEXT,
+                risk_title TEXT,
+                created_at TEXT
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS promo_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT UNIQUE,
+                user_id INTEGER DEFAULT NULL,
+                used_count INTEGER DEFAULT 0,
+                max_uses INTEGER DEFAULT 1,
+                created_at TEXT,
+                used_at TEXT DEFAULT NULL
+            )
+        """)
+        # Добавляем колонки если их нет
+        for col in ["agreed_at TEXT DEFAULT NULL"]:
+            try:
+                await db.execute(f"ALTER TABLE users ADD COLUMN {col}")
+            except Exception:
+                pass
+        await db.commit()
+
+        # Создаём промокоды при первом запуске
+        await _init_promo_codes(db)
+
+
+async def _init_promo_codes(db):
+    """Создаёт промокоды если их ещё нет"""
+    codes = [
+        ("OWNER2025", 999),   # твой личный — безлимит
+        ("PILOT001", 1),
+        ("PILOT002", 1),
+        ("PILOT003", 1),
+        ("PILOT004", 1),
+        ("PILOT005", 1),
+    ]
+    for code, max_uses in codes:
         try:
-            await db.execute("ALTER TABLE users ADD COLUMN agreed_at TEXT DEFAULT NULL")
+            await db.execute(
+                "INSERT OR IGNORE INTO promo_codes (code, max_uses, created_at) VALUES (?, ?, ?)",
+                (code, max_uses, datetime.now().isoformat())
+            )
         except Exception:
             pass
+    await db.commit()
+
+
+async def check_promo_code(code: str) -> bool:
+    """Проверяет валидность промокода"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT used_count, max_uses FROM promo_codes WHERE code = ?",
+            (code.upper(),)
+        ) as cur:
+            row = await cur.fetchone()
+            if not row:
+                return False
+            used, max_uses = row
+            return used < max_uses
+
+
+async def use_promo_code(code: str, user_id: int):
+    """Фиксирует использование промокода"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """UPDATE promo_codes
+               SET used_count = used_count + 1,
+                   user_id = ?,
+                   used_at = ?
+               WHERE code = ?""",
+            (user_id, datetime.now().isoformat(), code.upper())
+        )
+        await db.commit()
+
+
+async def save_risk_stats(analysis_id: int, doc_type: str, role: str, risk_titles: list):
+    """Сохраняет заголовки рисков для статистики"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        for title in risk_titles:
+            await db.execute(
+                """INSERT INTO risk_stats (analysis_id, doc_type, role, risk_title, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (analysis_id, doc_type, role, title, datetime.now().isoformat())
+            )
         await db.commit()
 
 

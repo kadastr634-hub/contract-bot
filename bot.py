@@ -12,7 +12,8 @@ from database import (
     init_db, get_or_create_user, set_user_role, get_user_role,
     save_analysis, get_analysis, save_pro_result,
     create_payment_record, update_payment_status,
-    get_user_agreement, save_user_agreement
+    get_user_agreement, save_user_agreement,
+    check_promo_code, use_promo_code, save_risk_stats
 )
 from payments import create_payment, check_payment_status
 from ai_engine import (
@@ -44,6 +45,9 @@ ROLES = {
 }
 
 PRIVACY_URL = "https://telegra.ph/Politika-obrabotki-personalnyh-dannyh-07-04-3"
+
+# Хранение ожидания промокода
+waiting_promo: dict[int, int] = {}
 
 
 def extract_pdf(path: str) -> str:
@@ -118,6 +122,11 @@ def format_free_result(data: dict, analysis_id: int):
             f"🔓 Получить полный разбор — {PAID_PRICE} ₽",
             callback_data=f"pay_{analysis_id}"
         )
+    ], [
+        InlineKeyboardButton(
+            "🎟 У меня есть промокод",
+            callback_data=f"promo_{analysis_id}"
+        )
     ]])
 
     return text, keyboard
@@ -153,7 +162,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "🤖 <b>Можно подписывать AI</b>\n\n"
             "Проверяю договоры перед подписанием за 30 секунд.\n\n"
-            "Перед началом ознакомьтесь с <a href='" + PRIVACY_URL + "'>политикой "
+            f"Перед началом ознакомьтесь с <a href='{PRIVACY_URL}'>политикой "
             "обработки персональных данных</a> и нажмите «Согласен».",
             reply_markup=keyboard,
             parse_mode="HTML"
@@ -192,6 +201,23 @@ async def agree_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await save_user_agreement(user_id)
     await show_menu(query.message)
+
+
+async def promo_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = update.effective_user.id
+
+    try:
+        analysis_id = int(query.data.split("_")[1])
+    except (IndexError, ValueError):
+        await query.message.reply_text("❌ Ошибка. Попробуйте снова.")
+        return
+
+    waiting_promo[user_id] = analysis_id
+    await query.message.reply_text(
+        "🎟 Введите промокод:"
+    )
 
 
 async def pay_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -274,19 +300,22 @@ async def check_payment_callback(update: Update, context: ContextTypes.DEFAULT_T
         )
 
 
-async def send_pro_analysis(user_id: int, payment_id: str, message):
+async def send_pro_analysis(user_id: int, payment_id: str, message,
+                             analysis_override: dict = None):
     from database import get_payment_by_id
 
-    payment = await get_payment_by_id(payment_id)
-    if not payment:
-        await message.reply_text("❌ Не найдена запись платежа. Напишите нам.")
-        return
+    if analysis_override:
+        analysis = analysis_override
+    else:
+        payment = await get_payment_by_id(payment_id)
+        if not payment:
+            await message.reply_text("❌ Не найдена запись платежа. Напишите нам.")
+            return
+        analysis = await get_analysis(payment["analysis_id"])
 
-    analysis = await get_analysis(payment["analysis_id"])
     if not analysis:
         await message.reply_text(
-            "❌ Не найден документ. Загрузите договор повторно — "
-            "этот анализ будет бесплатным."
+            "❌ Не найден документ. Загрузите договор повторно."
         )
         return
 
@@ -296,8 +325,8 @@ async def send_pro_analysis(user_id: int, payment_id: str, message):
             build_pro_prompt(
                 analysis["doc_text"],
                 analysis["role"] or "Не указана",
-                analysis["verdict"] or "",
-                analysis["score"] or 0
+                analysis.get("verdict") or "",
+                analysis.get("score") or 0
             )
         )
         if raw_pro:
@@ -309,14 +338,24 @@ async def send_pro_analysis(user_id: int, payment_id: str, message):
     if not raw_pro:
         await message.reply_text(
             "⚠️ Сервис анализа сейчас временно перегружен.\n\n"
-            "Обычно это занимает менее минуты.\n\n"
             "Если анализ не придёт в течение 2 минут — напишите нам."
         )
         return
 
     pro_data = parse_pro(raw_pro)
     if pro_data:
-        await save_pro_result(payment["analysis_id"], pro_data)
+        await save_pro_result(analysis["id"], pro_data)
+
+        # Сохраняем статистику рисков
+        risk_titles = [r.get("title", "") for r in pro_data.get("risks", []) if r.get("title")]
+        if risk_titles:
+            await save_risk_stats(
+                analysis["id"],
+                analysis.get("doc_type", "unknown"),
+                analysis.get("role", "unknown"),
+                risk_titles
+            )
+
         messages = format_pro_result(pro_data)
     else:
         messages = [f"📋 <b>Полный анализ:</b>\n\n{raw_pro[:3500]}"]
@@ -362,11 +401,35 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Защита от спама
     if update.message.text:
         spam_keywords = ["казино", "casino", "ставки", "бонус", "фрибет",
-                        "lucky", "кэшбэк", "выплат", "http", "https", "t.me/+"]
+                        "lucky", "кэшбэк", "выплат", "t.me/+"]
         msg_lower = update.message.text.lower()
         if any(kw in msg_lower for kw in spam_keywords):
             log.warning(f"Спам от user={user_id}: {update.message.text[:50]}")
             return
+
+    # Проверка промокода
+    if update.message.text and user_id in waiting_promo:
+        code = update.message.text.strip().upper()
+        analysis_id = waiting_promo.pop(user_id)
+
+        valid = await check_promo_code(code)
+        if valid:
+            await use_promo_code(code, user_id)
+            log.info(f"Промокод {code} использован user={user_id}")
+            await update.message.reply_text(
+                "✅ Промокод принят! Запускаю полный анализ...\n⏳ 15–30 секунд."
+            )
+            analysis = await get_analysis(analysis_id)
+            if analysis:
+                await send_pro_analysis(user_id, "", update.message, analysis)
+            else:
+                await update.message.reply_text("❌ Анализ не найден. Загрузите договор повторно.")
+        else:
+            await update.message.reply_text(
+                "❌ Промокод недействителен или уже использован.\n\n"
+                "Попробуйте снова или оплатите картой."
+            )
+        return
 
     text = None
     doc_type = "text"
@@ -477,6 +540,7 @@ app = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("privacy", privacy_command))
 app.add_handler(CallbackQueryHandler(agree_callback, pattern=r"^agree$"))
+app.add_handler(CallbackQueryHandler(promo_callback, pattern=r"^promo_\d+$"))
 app.add_handler(CallbackQueryHandler(pay_callback, pattern=r"^pay_\d+$"))
 app.add_handler(CallbackQueryHandler(check_payment_callback, pattern=r"^check_.+$"))
 app.add_handler(CallbackQueryHandler(new_analysis_callback, pattern=r"^new_analysis$"))
