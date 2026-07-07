@@ -77,14 +77,18 @@ async def init_db():
 
 
 async def _init_promo_codes(db):
-    """Создаёт промокоды если их ещё нет"""
     codes = [
-        ("OWNER2025", 999),   # твой личный — безлимит
+        ("OWNER2025", 999),
         ("PILOT001", 1),
         ("PILOT002", 1),
         ("PILOT003", 1),
         ("PILOT004", 1),
         ("PILOT005", 1),
+        ("PILOT006", 1),
+        ("PILOT007", 1),
+        ("PILOT008", 1),
+        ("PILOT009", 1),
+        ("PILOT010", 1),
     ]
     for code, max_uses in codes:
         try:
