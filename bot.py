@@ -7,7 +7,7 @@ from telegram.ext import (
     CallbackQueryHandler, ContextTypes, filters
 )
 
-from config import TELEGRAM_TOKEN, PAID_PRICE
+from config import TELEGRAM_TOKEN, PAID_PRICE, validate_config
 from database import (
     init_db, get_or_create_user, set_user_role, get_user_role,
     save_analysis, get_analysis, save_pro_result,
@@ -536,6 +536,7 @@ async def post_init(application):
     log.info("БД инициализирована")
 
 
+validate_config()
 app = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("privacy", privacy_command))

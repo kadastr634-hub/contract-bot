@@ -1,0 +1,34 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Runtime files
+*.log
+bot.db
+*.sqlite
+*.sqlite3
+
+# Local documents / user uploads
+*.docx
+*.pdf
+!docs/**/*.pdf
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

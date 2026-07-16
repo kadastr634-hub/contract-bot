@@ -1,9 +1,9 @@
 import re
 from gigachat import GigaChat
 from gigachat.models import Chat, Messages, MessagesRole
-from config import GIGACHAT_TOKEN
+from config import GIGACHAT_TOKEN, GIGACHAT_VERIFY_SSL
 
-llm = GigaChat(credentials=GIGACHAT_TOKEN, verify_ssl_certs=False)
+llm = GigaChat(credentials=GIGACHAT_TOKEN, verify_ssl_certs=GIGACHAT_VERIFY_SSL)
 
 
 def build_free_prompt(text: str, role: str) -> str:
