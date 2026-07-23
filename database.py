@@ -168,14 +168,17 @@ async def get_user_role(user_id: int):
             return row[0] if row else None
 
 
-async def save_analysis(user_id, role, doc_type, doc_text, verdict, score, free_result):
+async def save_analysis(user_id, role, doc_type, doc_text, verdict, score,
+                        free_result, pro_result=None):
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             """INSERT INTO analyses
-               (user_id, role, doc_type, doc_text, verdict, score, free_result, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (user_id, role, doc_type, doc_text, verdict, score, free_result,
+                pro_result, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (user_id, role, doc_type, doc_text, verdict, score,
              json.dumps(free_result, ensure_ascii=False),
+             json.dumps(pro_result, ensure_ascii=False) if pro_result else None,
              datetime.now().isoformat())
         )
         await db.commit()

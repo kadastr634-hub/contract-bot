@@ -6,32 +6,23 @@ from config import GIGACHAT_TOKEN, GIGACHAT_VERIFY_SSL
 llm = GigaChat(credentials=GIGACHAT_TOKEN, verify_ssl_certs=GIGACHAT_VERIFY_SSL)
 
 
-def build_free_prompt(text: str, role: str) -> str:
-    text = text[:20000] if len(text) > 20000 else text
-    return f"""Ты — AI Risk Engine для анализа договоров.
-Роль клиента: {role}
+RISK_MARKERS = (
+    "полученн", "по усмотрению", "разумн", "самостоятельн",
+    "при наличии возможности", "вправе",
+)
 
-Проанализируй договор и верни ТОЛЬКО структурированный результат.
+FINANCIAL_TERMS = (
+    "оплат", "вознагражден", "стоимост", "цен", "сумм", "денеж",
+    "штраф", "неустой", "расход", "налог", "удержан", "задолж",
+)
 
-ДОКУМЕНТ:
-{text}
+FORMAL_TERMS = ("подсуд", "персональн", "конфиденц")
 
-ОБЯЗАТЕЛЬНЫЙ ФОРМАТ — строго 4 поля, ничего лишнего:
 
-VERDICT: [🟢 Можно подписывать / 🟡 Можно подписывать с правками / 🔴 Нельзя подписывать]
-SCORE: [целое число от 0 до 10]
-TOTAL_RISKS: [общее количество рисков в договоре]
-RISK_TITLE: [общее название самого критичного риска — коротко, без деталей, без цитат, без номеров пунктов]
-
-ЗАПРЕЩЕНО:
-- Писать более 4 полей
-- Указывать номера пунктов
-- Цитировать текст договора
-- Давать рекомендации
-- Описывать второй и последующие риски
-- Добавлять любые поля кроме четырёх выше
-
-Анализируй с позиции роли: {role}"""
+def detect_risk_markers(text: str) -> list[str]:
+    """Возвращает найденные в тексте маркеры неоднозначности без дублей."""
+    lowered = text.lower()
+    return [marker for marker in RISK_MARKERS if marker in lowered]
 
 
 def build_pro_prompt(text: str, role: str, verdict: str = "", score: int = 0) -> str:
@@ -39,10 +30,23 @@ def build_pro_prompt(text: str, role: str, verdict: str = "", score: int = 0) ->
     verdict_hint = ""
     if verdict and score:
         verdict_hint = f"\nВАЖНО: используй именно этот вердикт: {verdict}, Score: {score}\n"
+    markers = detect_risk_markers(text)
+    markers_hint = ", ".join(markers) if markers else "не обнаружены автоматически"
+    is_fragment = len(text) < 3000
+    scope = (
+        "Передан фрагмент договора. Анализируй только фактически переданный текст. "
+        "Не считай риском отсутствие разделов о подсудности, конфиденциальности, "
+        "персональных данных, реквизитов и иных условий, которых во фрагменте нет."
+        if is_fragment else
+        "Передан договор или крупная часть договора. Анализируй все фактически имеющиеся условия."
+    )
     return f"""Ты — AI Risk Engine для анализа договоров. Ты профессиональный юрист-аналитик.
 Роль клиента: {role}
 {verdict_hint}
 Дай ПОЛНЫЙ профессиональный анализ договора.
+
+ОБЪЁМ ТЕКСТА: {scope}
+АВТОМАТИЧЕСКИ НАЙДЕННЫЕ МАРКЕРЫ НЕОДНОЗНАЧНОСТИ: {markers_hint}
 
 ДОКУМЕНТ:
 {text}
@@ -74,6 +78,19 @@ FINAL_RECOMMENDATION: [итоговый совет]
 
 ПРАВИЛА:
 - Анализируй строго с позиции роли: {role}
+- Сначала ищи риски возможной потери денег: базу и момент расчёта
+  вознаграждения, налоги и удержания, расходы, очередность платежей,
+  двойную оплату, штрафы и иные финансовые последствия
+- Затем ищи односторонние преимущества, право одной стороны самостоятельно
+  определять порядок исполнения или толковать договор, двойное толкование и
+  неопределённые термины
+- Любой риск возможной потери денег обязательно включай в первые три риска
+- Каждый самостоятельный финансовый или односторонний риск оформляй отдельно
+- Подсудность, персональные данные и конфиденциальность ставь после практически
+  значимых рисков; для фрагмента не придумывай риски отсутствующих разделов
+- Формулировки «полученная сумма», «по усмотрению», «разумный срок», «вправе»,
+  «самостоятельно определяет» и «при наличии возможности» считай сигналами
+  повышенного риска, если они влияют на права, деньги или порядок исполнения
 - RISK_X_POINT — обязательно заполнять, не оставлять пустым
 - Найди все значимые риски (до 7)
 - Правки БЫЛО→СТАЛО должны быть конкретными юридическими формулировками
@@ -100,30 +117,6 @@ def ask_gigachat(prompt: str):
         return None
 
 
-def parse_free(raw: str):
-    if not raw:
-        return None
-
-    def find(pattern, default=None):
-        m = re.search(pattern, raw, re.IGNORECASE)
-        return m.group(1).strip() if m else default
-
-    score_raw = find(r"SCORE:\s*(\d+)")
-
-    # Берём только первую строку RISK_TITLE — обрезаем мусор
-    risk_raw = find(r"RISK_TITLE:\s*(.+)", "Риск не определён")
-    if risk_raw:
-        risk_title = risk_raw.split("\n")[0].strip()
-    else:
-        risk_title = "Риск не определён"
-
-    return {
-        "score": int(score_raw) if score_raw else 5,
-        "total_risks": find(r"TOTAL_RISKS:\s*(\d+)", "?"),
-        "risk_title": risk_title,
-    }
-
-
 def parse_pro(raw: str):
     if not raw:
         return None
@@ -134,7 +127,7 @@ def parse_pro(raw: str):
 
     result = {
         "verdict": find(r"VERDICT:\s*(.+?)(?:\n|SCORE)"),
-        "score": int(find(r"SCORE:\s*(\d+)") or "5"),
+        "score": max(0, min(int(find(r"SCORE:\s*(\d+)") or "5"), 10)),
         "summary": find(r"SUMMARY:\s*(.+?)(?:\n\nRISK|\nRISK)"),
         "risks": [],
         "negotiation": find(r"NEGOTIATION:\s*(.+?)(?:\nFINAL|FINAL_RECOMMENDATION)"),
@@ -158,6 +151,35 @@ def parse_pro(raw: str):
         result["raw"] = raw
 
     return result
+
+
+def prioritize_analysis(data: dict, source_text: str) -> dict:
+    """Поднимает подтверждённые финансовые риски и корректирует Score."""
+    if not data:
+        return data
+
+    def priority(risk: dict) -> tuple[int, int]:
+        content = " ".join(str(value) for value in risk.values()).lower()
+        financial = any(term in content for term in FINANCIAL_TERMS)
+        one_sided = any(term in content for term in RISK_MARKERS)
+        formal_only = any(term in content for term in FORMAL_TERMS) and not financial
+        return (0 if financial else 1 if one_sided else 3 if formal_only else 2, 0)
+
+    data["risks"] = sorted(data.get("risks", []), key=priority)
+    marker_count = len(detect_risk_markers(source_text))
+    if marker_count:
+        data["score"] = min(10, max(0, int(data.get("score", 5))) + min(marker_count, 2))
+        data["verdict"] = get_verdict(data["score"])
+    return data
+
+
+def build_free_result(data: dict) -> dict:
+    """Создаёт FREE-витрину из уже готового полного анализа."""
+    risks = data.get("risks", []) if data else []
+    return {
+        "score": data.get("score", 5) if data else 5,
+        "risk_title": risks[0].get("title", "Риск не определён") if risks else "Риск не определён",
+    }
 
 
 def get_verdict(score: int) -> str:
