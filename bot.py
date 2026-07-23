@@ -1,13 +1,14 @@
 import os
 import time
+import json
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, filters
 )
 
-from config import TELEGRAM_TOKEN, PAID_PRICE
+from config import TELEGRAM_TOKEN, PAID_PRICE, validate_config
 from database import (
     init_db, get_or_create_user, set_user_role, get_user_role,
     save_analysis, get_analysis, save_pro_result,
@@ -17,8 +18,8 @@ from database import (
 )
 from payments import create_payment, check_payment_status
 from ai_engine import (
-    build_free_prompt, build_pro_prompt, ask_gigachat,
-    parse_free, parse_pro, get_verdict, format_pro_result
+    build_pro_prompt, ask_gigachat, parse_pro, get_verdict,
+    format_pro_result, prioritize_analysis, build_free_result
 )
 
 import fitz
@@ -46,7 +47,6 @@ ROLES = {
 
 PRIVACY_URL = "https://telegra.ph/Politika-obrabotki-personalnyh-dannyh-07-04-3"
 
-# Хранение ожидания промокода
 waiting_promo: dict[int, int] = {}
 
 
@@ -74,40 +74,20 @@ def format_free_result(data: dict, analysis_id: int):
     verdict = get_verdict(data["score"])
     risk_title = data.get("risk_title", "—")
 
-    try:
-        total_int = int(data.get("total_risks", 1))
-    except (ValueError, TypeError):
-        total_int = 1
-
-    if total_int == 1:
-        risks_line = "⚠️ Обнаружен <b>1 риск</b>"
-        risk_header = "⚠️ <b>КЛЮЧЕВОЙ РИСК</b>"
-        hidden_block = ""
-        all_risks_line = "полный разбор найденного риска с конкретным пунктом"
-    else:
-        risks_line = f"⚠️ Обнаружено рисков: <b>{total_int}</b>"
-        risk_header = f"⚠️ <b>КЛЮЧЕВОЙ РИСК (1 из {total_int})</b>"
-        hidden_count = total_int - 1
-        if hidden_count == 1:
-            hidden_word = "риск скрыт"
-        elif hidden_count < 5:
-            hidden_word = "риска скрыты"
-        else:
-            hidden_word = "рисков скрыты"
-        hidden_block = f"\n<b>+ ещё {hidden_count} {hidden_word}</b>\n"
-        all_risks_line = f"все {total_int} риска с конкретными пунктами договора"
+    risk_header = "⚠️ <b>КЛЮЧЕВОЙ РИСК</b>"
+    all_risks_line = "полный список рисков с конкретными пунктами договора"
 
     text = (
         f"📌 <b>РЕЗУЛЬТАТ ПРОВЕРКИ</b>\n\n"
         f"{verdict}\n\n"
         f"📊 <b>Score:</b> {data['score']}/10\n"
-        f"{risks_line}\n\n"
+        f"⚠️ Обнаружены <b>значимые условия для проверки</b>\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{risk_header}\n\n"
         f"<b>{risk_title}</b>\n\n"
         f"В договоре есть условие, которое в случае спора работает против вас.\n"
         f"Это может стоить вам денег.\n"
-        f"{hidden_block}\n"
+        f"<b>Полный список раскрывается в PRO из этого же анализа.</b>\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
         f"Чтобы узнать:\n"
         f"— {all_risks_line}\n"
@@ -142,6 +122,27 @@ async def privacy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=keyboard,
         parse_mode="HTML"
     )
+
+
+async def new_analysis_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    await get_or_create_user(user.id, user.username or "")
+
+    agreed = await get_user_agreement(user.id)
+    if not agreed:
+        await start(update, context)
+        return
+
+    role = await get_user_role(user.id)
+    if role:
+        await update.message.reply_text(
+            f"📄 Отправьте следующий договор.\n\n"
+            f"Текущая роль: <b>{role}</b>\n"
+            f"Чтобы изменить роль — отправьте цифру от 1 до 7.",
+            parse_mode="HTML"
+        )
+    else:
+        await show_menu(update.message)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -319,30 +320,35 @@ async def send_pro_analysis(user_id: int, payment_id: str, message,
         )
         return
 
-    raw_pro = None
-    for attempt in range(2):
-        raw_pro = ask_gigachat(
-            build_pro_prompt(
-                analysis["doc_text"],
-                analysis["role"] or "Не указана",
-                analysis.get("verdict") or "",
-                analysis.get("score") or 0
-            )
-        )
-        if raw_pro:
-            break
-        if attempt == 0:
-            log.warning("GigaChat не ответил, повторная попытка...")
-            time.sleep(3)
+    pro_data = None
+    if analysis.get("pro_result"):
+        try:
+            pro_data = json.loads(analysis["pro_result"])
+        except (TypeError, json.JSONDecodeError):
+            log.warning("Не удалось прочитать сохранённый PRO analysis=%s", analysis["id"])
 
-    if not raw_pro:
+    # Совместимость со старыми анализами, созданными до единого AI-запроса.
+    raw_pro = None
+    if not pro_data:
+        for attempt in range(2):
+            raw_pro = ask_gigachat(build_pro_prompt(
+                analysis["doc_text"], analysis["role"] or "Не указана",
+                analysis.get("verdict") or "", analysis.get("score") or 0
+            ))
+            if raw_pro:
+                break
+            if attempt == 0:
+                log.warning("GigaChat не ответил, повторная попытка...")
+                time.sleep(3)
+        pro_data = prioritize_analysis(parse_pro(raw_pro), analysis["doc_text"]) if raw_pro else None
+
+    if not pro_data:
         await message.reply_text(
             "⚠️ Сервис анализа сейчас временно перегружен.\n\n"
             "Если анализ не придёт в течение 2 минут — напишите нам."
         )
         return
 
-    pro_data = parse_pro(raw_pro)
     if pro_data:
         await save_pro_result(analysis["id"], pro_data)
 
@@ -357,8 +363,6 @@ async def send_pro_analysis(user_id: int, payment_id: str, message,
             )
 
         messages = format_pro_result(pro_data)
-    else:
-        messages = [f"📋 <b>Полный анализ:</b>\n\n{raw_pro[:3500]}"]
 
     for msg in messages:
         await message.reply_text(msg, parse_mode="HTML")
@@ -473,10 +477,10 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if len(text.strip()) < 100:
+    if len(text.strip()) < 5:
         await update.message.reply_text(
             "⚠️ Текст слишком короткий.\n\n"
-            "Убедитесь что файл содержит текст, а не сканы изображений."
+            "Отправьте хотя бы одну договорную фразу, пункт или раздел."
         )
         return
 
@@ -485,7 +489,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     raw_ai = None
     for attempt in range(2):
-        raw_ai = ask_gigachat(build_free_prompt(text, role))
+        raw_ai = ask_gigachat(build_pro_prompt(text, role))
         if raw_ai:
             break
         if attempt == 0:
@@ -503,14 +507,15 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    data = parse_free(raw_ai)
-    if not data:
+    pro_data = prioritize_analysis(parse_pro(raw_ai), text)
+    if not pro_data:
         await update.message.reply_text(
             "⚠️ Сервис анализа сейчас временно перегружен.\n\n"
             "Попробуйте отправить договор ещё раз через минуту."
         )
         return
 
+    data = build_free_result(pro_data)
     verdict = get_verdict(data["score"])
     analysis_id = await save_analysis(
         user_id=user_id,
@@ -519,7 +524,8 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         doc_text=text,
         verdict=verdict,
         score=data["score"],
-        free_result=data
+        free_result=data,
+        pro_result=pro_data
     )
 
     log.info(f"Анализ #{analysis_id} user={user_id} score={data['score']} role={role}")
@@ -533,11 +539,19 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(application):
     await init_db()
+    await application.bot.set_my_commands([
+        BotCommand("start", "Главное меню"),
+        BotCommand("new", "Проверить ещё один договор"),
+        BotCommand("privacy", "Политика данных"),
+    ])
     log.info("БД инициализирована")
 
 
+validate_config()
 app = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("menu", start))
+app.add_handler(CommandHandler("new", new_analysis_command))
 app.add_handler(CommandHandler("privacy", privacy_command))
 app.add_handler(CallbackQueryHandler(agree_callback, pattern=r"^agree$"))
 app.add_handler(CallbackQueryHandler(promo_callback, pattern=r"^promo_\d+$"))
