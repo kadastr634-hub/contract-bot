@@ -45,6 +45,34 @@ ROLES = {
     "7": "Покупатель"
 }
 
+ROLE_ICONS = {
+    "1": "👤",
+    "2": "🏢",
+    "3": "🏠",
+    "4": "📄",
+    "5": "🛠",
+    "6": "🚚",
+    "7": "🛒",
+}
+
+
+def format_role_choices() -> str:
+    """Return the numbered role list used in Telegram messages."""
+    return "\n".join(
+        f"{ROLE_ICONS[number]} <b>{number}</b> — {role}"
+        for number, role in ROLES.items()
+    )
+
+
+def format_new_analysis_prompt(role: str) -> str:
+    """Explain how to upload another contract or change the current role."""
+    return (
+        "📄 Отправьте следующий договор.\n\n"
+        f"Текущая роль: <b>{role}</b>\n\n"
+        "Чтобы изменить роль, отправьте нужную цифру:\n\n"
+        f"{format_role_choices()}"
+    )
+
 PRIVACY_URL = "https://telegra.ph/Politika-obrabotki-personalnyh-dannyh-07-04-3"
 
 waiting_promo: dict[int, int] = {}
@@ -136,9 +164,7 @@ async def new_analysis_command(update: Update, context: ContextTypes.DEFAULT_TYP
     role = await get_user_role(user.id)
     if role:
         await update.message.reply_text(
-            f"📄 Отправьте следующий договор.\n\n"
-            f"Текущая роль: <b>{role}</b>\n"
-            f"Чтобы изменить роль — отправьте цифру от 1 до 7.",
+            format_new_analysis_prompt(role),
             parse_mode="HTML"
         )
     else:
@@ -184,13 +210,7 @@ async def show_menu(message):
         "✍️ Даю готовые формулировки «Было → Стало»\n"
         "🧠 Строю переговорную стратегию\n\n"
         "<b>Выберите роль — отправьте цифру:</b>\n\n"
-        "👤 <b>1</b> — Собственник бизнеса\n"
-        "🏢 <b>2</b> — Арендатор\n"
-        "🏠 <b>3</b> — Арендодатель\n"
-        "📄 <b>4</b> — Заказчик\n"
-        "🛠 <b>5</b> — Исполнитель\n"
-        "🚚 <b>6</b> — Поставщик\n"
-        "🛒 <b>7</b> — Покупатель\n\n"
+        f"{format_role_choices()}\n\n"
         "После выбора роли отправьте договор 👇",
         parse_mode="HTML"
     )
@@ -388,9 +408,7 @@ async def new_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     if role:
         await query.message.reply_text(
-            f"📄 Отправьте следующий договор.\n\n"
-            f"Текущая роль: <b>{role}</b>\n"
-            f"Чтобы изменить роль — отправьте цифру от 1 до 7.",
+            format_new_analysis_prompt(role),
             parse_mode="HTML"
         )
     else:
